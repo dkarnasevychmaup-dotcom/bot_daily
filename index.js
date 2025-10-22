@@ -2,26 +2,48 @@ import TelegramBot from "node-telegram-bot-api";
 import cron from "node-cron";
 import http from "http";
 
-const TOKEN = process.env.BOT_TOKEN;
-const GROUP_ID = process.env.GROUP_ID; // куди бот пересилає і рахує
-const CHANNEL_ID = process.env.CHANNEL_ID; // звідки бере пости
+const TOKEN = process.env.BOT_TOKEN || "8495715709:AAGgpb8ds9n-hGaQFIZwyXyizUc00-jtk94";
+const GROUP_ID = "-1002847487959"; // твоя група
+const CHANNEL_ID = process.env.CHANNEL_ID || ""; // опціонально, якщо хочеш обмежити канал
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 
 let dailyCount = 0;
 let weeklyCount = 0;
 
-// === Повідомлення про запуск ===
 bot.sendMessage(GROUP_ID, "🔔 Бот запущено і готовий рахувати повідомлення!");
 
-// === Пересилання постів з каналу ===
+// === Пересилання постів із каналу ===
 bot.on("channel_post", async (msg) => {
   if (!msg.text) return;
   try {
+    // Пересилаємо повідомлення з каналу в групу
     await bot.sendMessage(GROUP_ID, msg.text);
     console.log(`🔁 Переслано пост: "${msg.text}"`);
+
+    // Якщо в тексті є "надруковано", бот зараховує це як відправлення
+    if (msg.text.toLowerCase().includes("надруковано")) {
+      dailyCount++;
+      weeklyCount++;
+      console.log(`📥 Зараховано пост із каналу | День: ${dailyCount}, Тиждень: ${weeklyCount}`);
+    }
+
+    // Якщо пост містить команду /check або /reset
+    if (msg.text.toLowerCase().startsWith("/check")) {
+      await bot.sendMessage(
+        msg.chat.id,
+        `✅ Бот активний.\n📦 Сьогодні: ${dailyCount} відправлень.\n🗓️ Цього тижня: ${weeklyCount}.`
+      );
+    }
+
+    if (msg.text.toLowerCase().startsWith("/reset")) {
+      dailyCount = 0;
+      weeklyCount = 0;
+      await bot.sendMessage(msg.chat.id, "♻️ Лічильники скинуто вручну.");
+      console.log("🔄 Ресет через канал.");
+    }
   } catch (e) {
-    console.error("Помилка пересилання:", e.message);
+    console.error("Помилка обробки каналу:", e.message);
   }
 });
 
@@ -30,6 +52,7 @@ bot.on("message", (msg) => {
   if (!msg.text) return;
   const text = msg.text.toLowerCase();
 
+  // Рахує повідомлення "надруковано" навіть від бота
   if (text.includes("надруковано")) {
     dailyCount++;
     weeklyCount++;
@@ -68,7 +91,6 @@ cron.schedule("0 18 * * *", async () => {
   const dayMessage = `📅 ${formattedDate}\n📦 Підсумок дня: ${dailyCount} відправлень`;
   await bot.sendMessage(GROUP_ID, dayMessage);
 
-  // якщо п'ятниця — також підсумок тижня
   if (now.getDay() === 5) {
     const startOfWeek = new Date(now);
     startOfWeek.setDate(now.getDate() - 4);
