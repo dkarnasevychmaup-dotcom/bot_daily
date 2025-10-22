@@ -1,69 +1,87 @@
-const TelegramBot = require('node-telegram-bot-api');
-const cron = require('node-cron');
-const http = require('http');
+import TelegramBot from 'node-telegram-bot-api';
+import cron from 'node-cron';
+import http from 'http';
 
-// === 🔐 Змінні середовища (Render → Environment Variables) ===
-const BOT_TOKEN = process.env.BOT_TOKEN;
+const TOKEN = process.env.BOT_TOKEN;
 const CHAT_ID = process.env.CHAT_ID;
 
-if (!BOT_TOKEN || !CHAT_ID) {
-  console.error("❌ BOT_TOKEN або CHAT_ID не задано у Render Environment Variables!");
-  process.exit(1);
-}
+const bot = new TelegramBot(TOKEN, { polling: true });
 
-// === 🤖 Ініціалізація Telegram-бота ===
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+// === Лічильники ===
+let dailyCount = 0;
+let weeklyCount = 0;
 
-// === 📊 Лічильник відправлень ===
-let counter = 0;
-
-// === 🧩 Функція для обробки тексту ===
-const handleText = (msg) => {
+// === Реакція на повідомлення ===
+bot.on('message', (msg) => {
   if (!msg.text) return;
+
   const text = msg.text.toLowerCase();
+
+  // якщо є слово "надруковано"
   if (text.includes('надруковано')) {
-    counter++;
-    console.log(`📥 Отримано повідомлення ("${msg.text}"). Поточна кількість: ${counter}`);
+    dailyCount++;
+    weeklyCount++;
+    console.log(`📥 Отримано повідомлення: "${msg.text}" | День: ${dailyCount}, Тиждень: ${weeklyCount}`);
   }
-};
 
-// === 📩 Обробка повідомлень із груп, каналів і приватних чатів ===
-bot.on('message', handleText);        // групи, чати
-bot.on('channel_post', handleText);   // канали
+  // команда перевірки
+  if (text === '/check') {
+    bot.sendMessage(
+      msg.chat.id,
+      `✅ Бот активний.\n📦 Сьогодні зафіксовано: ${dailyCount} відправлень.\n🗓️ Цього тижня: ${weeklyCount}.`
+    );
+  }
 
-// === 🕕 Кожного дня о 18:00 за Києвом надсилає підсумок ===
-cron.schedule('0 18 * * *', async () => {
-  const now = new Date();
+  // команда ресет
+  if (text === '/reset') {
+    dailyCount = 0;
+    weeklyCount = 0;
+    bot.sendMessage(msg.chat.id, '♻️ Лічильники скинуто вручну.');
+    console.log('🔄 Лічильники скинуто вручну.');
+  }
+});
 
-  // форматування дати українською
-  const formattedDate = now.toLocaleDateString('uk-UA', {
-    day: 'numeric',
+// === Форматування дати ===
+function formatDate(date) {
+  return date.toLocaleDateString('uk-UA', {
+    day: '2-digit',
     month: 'long',
     year: 'numeric',
-    weekday: 'long'
   });
+}
 
-  const message = `📅 ${formattedDate}\n📦 Підсумок дня: ${counter} відправлень`;
+// === Підсумок дня ===
+cron.schedule('0 18 * * *', async () => {
+  const now = new Date();
+  const formattedDate = formatDate(now);
 
-  try {
-    await bot.sendMessage(CHAT_ID, message);
-    console.log(`[${now.toLocaleTimeString()}] ✅ Відправлено підсумок: ${message}`);
-  } catch (err) {
-    console.error("❌ Помилка надсилання підсумку:", err.message);
+  const dayMessage = `📅 ${formattedDate}\n📦 Підсумок дня: ${dailyCount} відправлень`;
+  await bot.sendMessage(CHAT_ID, dayMessage);
+
+  // якщо п’ятниця — відправляємо підсумок тижня
+  if (now.getDay() === 5) {
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() - 4);
+    const startStr = startOfWeek.toLocaleDateString('uk-UA', { day: '2-digit', month: 'long' });
+    const endStr = now.toLocaleDateString('uk-UA', { day: '2-digit', month: 'long' });
+
+    const weekMessage = `🗓️ Підсумок тижня, ${startStr} — ${endStr}\nУсього відправок: ${weeklyCount}`;
+    await bot.sendMessage(CHAT_ID, weekMessage);
+
+    weeklyCount = 0;
   }
 
-  counter = 0; // Скидаємо лічильник після відправлення
-}, {
-  timezone: "Europe/Kyiv"
+  dailyCount = 0;
 });
 
-// === 🩺 HTTP сервер для Render / UptimeRobot ===
-http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-  res.end('✅ Bot is alive');
-}).listen(process.env.PORT || 3000, () => {
-  console.log('🌐 HTTP сервер запущено на порту', process.env.PORT || 3000);
-});
+// === HTTP сервер ===
+http
+  .createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('✅ Bot is running');
+  })
+  .listen(process.env.PORT || 3000, () => {
+    console.log('🌐 HTTP сервер запущено на порту', process.env.PORT || 3000);
+  });
 
-// === ✅ Повідомлення у логах при старті ===
 console.log('✅ Daily Summary Bot запущено і чекає на повідомлення...');
