@@ -4,7 +4,7 @@ import http from "http";
 
 const TOKEN = process.env.BOT_TOKEN || "8495715709:AAGgpb8ds9n-hGaQFIZwyXyizUc00-jtk94";
 const GROUP_ID = "-1002847487959"; // твоя група
-const CHANNEL_ID = process.env.CHANNEL_ID || ""; // опціонально, якщо хочеш обмежити канал
+const CHANNEL_ID = process.env.CHANNEL_ID || ""; // ID каналу (можна лишити порожнім)
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 
@@ -16,47 +16,53 @@ bot.sendMessage(GROUP_ID, "🔔 Бот запущено і готовий рах
 // === Пересилання постів із каналу ===
 bot.on("channel_post", async (msg) => {
   if (!msg.text) return;
+
   try {
-    // Пересилаємо повідомлення з каналу в групу
+    // Пересилаємо повідомлення з каналу у групу
     await bot.sendMessage(GROUP_ID, msg.text);
     console.log(`🔁 Переслано пост: "${msg.text}"`);
 
-    // Якщо в тексті є "надруковано", бот зараховує це як відправлення
+    // Якщо є "надруковано" — рахуємо лише тут, не при дублюванні в групі
     if (msg.text.toLowerCase().includes("надруковано")) {
       dailyCount++;
       weeklyCount++;
       console.log(`📥 Зараховано пост із каналу | День: ${dailyCount}, Тиждень: ${weeklyCount}`);
     }
 
-    // Якщо пост містить команду /check або /reset
-    if (msg.text.toLowerCase().startsWith("/check")) {
+    // Обробка команд прямо в каналі
+    const text = msg.text.toLowerCase();
+
+    if (text.startsWith("/check")) {
       await bot.sendMessage(
         msg.chat.id,
         `✅ Бот активний.\n📦 Сьогодні: ${dailyCount} відправлень.\n🗓️ Цього тижня: ${weeklyCount}.`
       );
+      console.log("📊 Запит статистики через канал.");
     }
 
-    if (msg.text.toLowerCase().startsWith("/reset")) {
+    if (text.startsWith("/reset")) {
       dailyCount = 0;
       weeklyCount = 0;
       await bot.sendMessage(msg.chat.id, "♻️ Лічильники скинуто вручну.");
       console.log("🔄 Ресет через канал.");
     }
   } catch (e) {
-    console.error("Помилка обробки каналу:", e.message);
+    console.error("❌ Помилка обробки канального поста:", e.message);
   }
 });
 
 // === Обробка повідомлень у групі ===
 bot.on("message", (msg) => {
+  // Ігноруємо власні повідомлення бота
+  if (msg.from?.is_bot) return;
   if (!msg.text) return;
+
   const text = msg.text.toLowerCase();
 
-  // Рахує повідомлення "надруковано" навіть від бота
   if (text.includes("надруковано")) {
     dailyCount++;
     weeklyCount++;
-    console.log(`📥 "${msg.text}" | День: ${dailyCount}, Тиждень: ${weeklyCount}`);
+    console.log(`📥 Повідомлення з групи: "${msg.text}" | День: ${dailyCount}, Тиждень: ${weeklyCount}`);
   }
 
   if (text === "/check") {
@@ -70,7 +76,7 @@ bot.on("message", (msg) => {
     dailyCount = 0;
     weeklyCount = 0;
     bot.sendMessage(msg.chat.id, "♻️ Лічильники скинуто вручну.");
-    console.log("🔄 Лічильники обнулено вручну.");
+    console.log("🔄 Лічильники обнулено вручну в групі.");
   }
 });
 
@@ -91,6 +97,7 @@ cron.schedule("0 18 * * *", async () => {
   const dayMessage = `📅 ${formattedDate}\n📦 Підсумок дня: ${dailyCount} відправлень`;
   await bot.sendMessage(GROUP_ID, dayMessage);
 
+  // якщо п'ятниця — також тижневий підсумок
   if (now.getDay() === 5) {
     const startOfWeek = new Date(now);
     startOfWeek.setDate(now.getDate() - 4);
@@ -105,14 +112,13 @@ cron.schedule("0 18 * * *", async () => {
 
     const weekMessage = `🗓️ Підсумок тижня, ${startStr} — ${endStr}\nУсього відправок: ${weeklyCount}`;
     await bot.sendMessage(GROUP_ID, weekMessage);
-
     weeklyCount = 0;
   }
 
   dailyCount = 0;
 });
 
-// === HTTP сервер ===
+// === HTTP сервер для Render ===
 http
   .createServer((req, res) => {
     res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
