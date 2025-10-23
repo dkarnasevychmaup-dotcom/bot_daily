@@ -11,12 +11,9 @@ if (!TOKEN || !CHANNEL_ID) {
 }
 
 const bot = new TelegramBot(TOKEN, { polling: true });
-
 console.log("✅ Daily Summary Bot запущено!");
 
 // === Допоміжні функції ===
-
-// Форматує дату у вигляді “22 жовтня 2025”
 function formatDate(date) {
   return date.toLocaleDateString("uk-UA", {
     day: "2-digit",
@@ -25,14 +22,12 @@ function formatDate(date) {
   });
 }
 
-// Повертає UNIX timestamp початку доби (00:00)
 function startOfDay(date) {
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);
   return Math.floor(d.getTime() / 1000);
 }
 
-// Повертає UNIX timestamp кінця доби (23:59)
 function endOfDay(date) {
   const d = new Date(date);
   d.setHours(23, 59, 59, 999);
@@ -42,24 +37,21 @@ function endOfDay(date) {
 // === Основна функція підрахунку ===
 async function countMessagesInChannel(days = 1) {
   try {
-    let offset = 0;
-    let count = 0;
+    const updates = await bot.getUpdates({ limit: 1000 });
     const now = new Date();
 
-    // Обчислюємо часовий діапазон
     const fromDate = new Date(now);
     fromDate.setDate(now.getDate() - (days - 1));
 
     const start = startOfDay(fromDate);
     const end = endOfDay(now);
 
-    // Отримуємо історію (до 1000 постів)
-    const updates = await bot.getUpdates({ offset, limit: 1000 });
     const posts = updates
       .map((u) => u.channel_post)
       .filter((p) => p && p.chat && String(p.chat.id) === CHANNEL_ID);
 
-    // Фільтруємо тільки сьогоднішні повідомлення
+    let count = 0;
+
     for (const post of posts) {
       if (!post.date) continue;
       if (post.date >= start && post.date <= end) {
@@ -70,29 +62,48 @@ async function countMessagesInChannel(days = 1) {
 
     return count;
   } catch (err) {
-    console.error("❌ Помилка при підрахунку:", err.message);
+    console.error("❌ Помилка підрахунку:", err.message);
     return 0;
   }
 }
 
-// === Команда /check: миттєвий підсумок дня ===
+// === Команди каналу ===
 bot.on("channel_post", async (msg) => {
   if (!msg.text) return;
   const text = msg.text.toLowerCase();
 
   if (text === "/check") {
     const todayCount = await countMessagesInChannel(1);
-    const now = new Date();
-    const formattedDate = formatDate(now);
-
+    const formattedDate = formatDate(new Date());
     await bot.sendMessage(
       CHANNEL_ID,
       `📅 ${formattedDate}\n📦 Підсумок дня: ${todayCount} відправлень`
     );
   }
+
+  if (text === "/week") {
+    const weekCount = await countMessagesInChannel(7);
+    const now = new Date();
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() - 6);
+
+    const startStr = startOfWeek.toLocaleDateString("uk-UA", {
+      day: "2-digit",
+      month: "long",
+    });
+    const endStr = now.toLocaleDateString("uk-UA", {
+      day: "2-digit",
+      month: "long",
+    });
+
+    await bot.sendMessage(
+      CHANNEL_ID,
+      `🗓️ Підсумок тижня, ${startStr} — ${endStr}\nУсього відправок: ${weekCount}`
+    );
+  }
 });
 
-// === Підсумок щодня о 18:00 (Київ) ===
+// === Автоматичний підсумок щодня о 18:00 (Київ) ===
 cron.schedule(
   "0 18 * * *",
   async () => {
@@ -101,17 +112,17 @@ cron.schedule(
 
     const todayCount = await countMessagesInChannel(1);
 
-    // надсилаємо підсумок дня
     await bot.sendMessage(
       CHANNEL_ID,
       `📅 ${formattedDate}\n📦 Підсумок дня: ${todayCount} відправлень`
     );
 
-    // якщо п’ятниця — також тижневий підсумок
+    // якщо п’ятниця — додаємо підсумок тижня
     if (now.getDay() === 5) {
       const weekCount = await countMessagesInChannel(7);
       const startOfWeek = new Date(now);
-      startOfWeek.setDate(now.getDate() - 4);
+      startOfWeek.setDate(now.getDate() - 6);
+
       const startStr = startOfWeek.toLocaleDateString("uk-UA", {
         day: "2-digit",
         month: "long",
