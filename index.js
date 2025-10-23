@@ -1,5 +1,7 @@
 import TelegramBot from "node-telegram-bot-api";
 import cron from "node-cron";
+import fs from "fs";
+import path from "path";
 import http from "http";
 
 const TOKEN = process.env.BOT_TOKEN || "8495715709:AAGgpb8ds9n-hGaQFIZwyXyizUc00-jtk94";
@@ -13,7 +15,24 @@ if (!TOKEN || !CHANNEL_ID) {
 const bot = new TelegramBot(TOKEN, { polling: true });
 console.log("✅ Daily Summary Bot запущено!");
 
+// === Файл для кешу ===
+const DATA_PATH = path.join(process.cwd(), "data.json");
+
 // === Допоміжні функції ===
+function loadData() {
+  try {
+    if (!fs.existsSync(DATA_PATH)) return [];
+    const data = JSON.parse(fs.readFileSync(DATA_PATH, "utf8"));
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveData(data) {
+  fs.writeFileSync(DATA_PATH, JSON.stringify(data, null, 2));
+}
+
 function formatDate(date) {
   return date.toLocaleDateString("uk-UA", {
     day: "2-digit",
@@ -25,105 +44,118 @@ function formatDate(date) {
 function startOfDay(date) {
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);
-  return Math.floor(d.getTime() / 1000);
+  return d.getTime();
 }
 
 function endOfDay(date) {
   const d = new Date(date);
   d.setHours(23, 59, 59, 999);
-  return Math.floor(d.getTime() / 1000);
+  return d.getTime();
 }
 
-// === Основна функція підрахунку ===
-async function countMessagesInChannel(days = 1) {
-  try {
-    const updates = await bot.getUpdates({ limit: 1000 });
-    const now = new Date();
-
-    const fromDate = new Date(now);
-    fromDate.setDate(now.getDate() - (days - 1));
-
-    const start = startOfDay(fromDate);
-    const end = endOfDay(now);
-
-    const posts = updates
-      .map((u) => u.channel_post)
-      .filter((p) => p && p.chat && String(p.chat.id) === CHANNEL_ID);
-
-    let count = 0;
-
-    for (const post of posts) {
-      if (!post.date) continue;
-      if (post.date >= start && post.date <= end) {
-        const text = (post.text || post.caption || "").toLowerCase();
-        if (text.includes("надруковано")) count++;
-      }
-    }
-
-    return count;
-  } catch (err) {
-    console.error("❌ Помилка підрахунку:", err.message);
-    return 0;
+function cleanupOldEntries() {
+  const data = loadData();
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const filtered = data.filter((item) => item.timestamp > weekAgo);
+  if (filtered.length !== data.length) {
+    saveData(filtered);
+    console.log("🧹 Очищено старі записи:", data.length - filtered.length);
   }
 }
 
-// === Команди каналу ===
+// === Обробка нових постів із каналу ===
 bot.on("channel_post", async (msg) => {
-  if (!msg.text) return;
-  const text = msg.text.toLowerCase();
+  if (!msg.text && !msg.caption) return;
 
+  const text = (msg.text || msg.caption).toLowerCase();
+
+  // Зберігаємо тільки якщо є слово "надруковано"
+  if (text.includes("надруковано")) {
+    const data = loadData();
+    data.push({
+      timestamp: Date.now(),
+      text: msg.text || msg.caption,
+    });
+    saveData(data);
+    console.log("📥 Нове відправлення збережено. Загалом:", data.length);
+  }
+
+  // Команди
   if (text === "/check") {
-    const todayCount = await countMessagesInChannel(1);
-    const formattedDate = formatDate(new Date());
+    const data = loadData();
+    const now = new Date();
+    const count = data.filter(
+      (d) => d.timestamp >= startOfDay(now) && d.timestamp <= endOfDay(now)
+    ).length;
+
+    const formattedDate = formatDate(now);
     await bot.sendMessage(
       CHANNEL_ID,
-      `📅 ${formattedDate}\n📦 Підсумок дня: ${todayCount} відправлень`
+      `📅 ${formattedDate}\n📦 Підсумок дня: ${count} відправлень`
     );
   }
 
   if (text === "/week") {
-    const weekCount = await countMessagesInChannel(7);
-    const now = new Date();
-    const startOfWeek = new Date(now);
-    startOfWeek.setDate(now.getDate() - 6);
+    const data = loadData();
+    const now = Date.now();
+    const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
+    const count = data.filter((d) => d.timestamp >= weekAgo).length;
 
-    const startStr = startOfWeek.toLocaleDateString("uk-UA", {
+    const end = new Date();
+    const start = new Date(weekAgo);
+    const startStr = start.toLocaleDateString("uk-UA", {
       day: "2-digit",
       month: "long",
     });
-    const endStr = now.toLocaleDateString("uk-UA", {
+    const endStr = end.toLocaleDateString("uk-UA", {
       day: "2-digit",
       month: "long",
     });
 
     await bot.sendMessage(
       CHANNEL_ID,
-      `🗓️ Підсумок тижня, ${startStr} — ${endStr}\nУсього відправок: ${weekCount}`
+      `🗓️ Підсумок тижня, ${startStr} — ${endStr}\nУсього відправок: ${count}`
     );
+  }
+
+  if (text === "/reset_day") {
+    const data = loadData();
+    const now = new Date();
+    const filtered = data.filter((d) => d.timestamp < startOfDay(now));
+    saveData(filtered);
+    await bot.sendMessage(CHANNEL_ID, "♻️ Денний лічильник очищено.");
+  }
+
+  if (text === "/reset_week") {
+    saveData([]);
+    await bot.sendMessage(CHANNEL_ID, "♻️ Тижневий лічильник очищено.");
   }
 });
 
-// === Автоматичний підсумок щодня о 18:00 (Київ) ===
+// === Щоденний підсумок о 18:00 ===
 cron.schedule(
   "0 18 * * *",
   async () => {
+    cleanupOldEntries();
+    const data = loadData();
     const now = new Date();
+    const count = data.filter(
+      (d) => d.timestamp >= startOfDay(now) && d.timestamp <= endOfDay(now)
+    ).length;
+
     const formattedDate = formatDate(now);
-
-    const todayCount = await countMessagesInChannel(1);
-
     await bot.sendMessage(
       CHANNEL_ID,
-      `📅 ${formattedDate}\n📦 Підсумок дня: ${todayCount} відправлень`
+      `📅 ${formattedDate}\n📦 Підсумок дня: ${count} відправлень`
     );
 
-    // якщо п’ятниця — додаємо підсумок тижня
+    // Якщо п'ятниця — додаємо тижневий
     if (now.getDay() === 5) {
-      const weekCount = await countMessagesInChannel(7);
-      const startOfWeek = new Date(now);
-      startOfWeek.setDate(now.getDate() - 6);
+      const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      const weekCount = data.filter((d) => d.timestamp >= weekAgo).length;
 
-      const startStr = startOfWeek.toLocaleDateString("uk-UA", {
+      const start = new Date(weekAgo);
+      const startStr = start.toLocaleDateString("uk-UA", {
         day: "2-digit",
         month: "long",
       });
@@ -141,7 +173,7 @@ cron.schedule(
   { timezone: "Europe/Kyiv" }
 );
 
-// === HTTP-сервер для Render ===
+// === HTTP сервер для Render ===
 http
   .createServer((req, res) => {
     res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
