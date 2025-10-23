@@ -3,84 +3,20 @@ import cron from "node-cron";
 import http from "http";
 
 const TOKEN = process.env.BOT_TOKEN || "8495715709:AAGgpb8ds9n-hGaQFIZwyXyizUc00-jtk94";
-const GROUP_ID = "-1002847487959"; // твоя група
-const CHANNEL_ID = process.env.CHANNEL_ID || ""; // ID каналу (можна лишити порожнім)
+const CHANNEL_ID = process.env.CHANNEL_ID || "-1002847487959"; // ← твій канал
+
+if (!TOKEN || !CHANNEL_ID) {
+  console.error("❌ Вкажи BOT_TOKEN і CHANNEL_ID у Render Environment Variables!");
+  process.exit(1);
+}
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-let dailyCount = 0;
-let weeklyCount = 0;
+console.log("✅ Daily Summary Bot запущено!");
 
-bot.sendMessage(GROUP_ID, "🔔 Бот запущено і готовий рахувати повідомлення!");
+// === Допоміжні функції ===
 
-// === Пересилання постів із каналу ===
-bot.on("channel_post", async (msg) => {
-  if (!msg.text) return;
-
-  try {
-    // Пересилаємо повідомлення з каналу у групу
-    await bot.sendMessage(GROUP_ID, msg.text);
-    console.log(`🔁 Переслано пост: "${msg.text}"`);
-
-    // Якщо є "надруковано" — рахуємо лише тут, не при дублюванні в групі
-    if (msg.text.toLowerCase().includes("надруковано")) {
-      dailyCount++;
-      weeklyCount++;
-      console.log(`📥 Зараховано пост із каналу | День: ${dailyCount}, Тиждень: ${weeklyCount}`);
-    }
-
-    // Обробка команд прямо в каналі
-    const text = msg.text.toLowerCase();
-
-    if (text.startsWith("/check")) {
-      await bot.sendMessage(
-        msg.chat.id,
-        `✅ Бот активний.\n📦 Сьогодні: ${dailyCount} відправлень.\n🗓️ Цього тижня: ${weeklyCount}.`
-      );
-      console.log("📊 Запит статистики через канал.");
-    }
-
-    if (text.startsWith("/reset")) {
-      dailyCount = 0;
-      weeklyCount = 0;
-      await bot.sendMessage(msg.chat.id, "♻️ Лічильники скинуто вручну.");
-      console.log("🔄 Ресет через канал.");
-    }
-  } catch (e) {
-    console.error("❌ Помилка обробки канального поста:", e.message);
-  }
-});
-
-// === Обробка повідомлень у групі ===
-bot.on("message", (msg) => {
-  // Ігноруємо власні повідомлення бота
-  if (msg.from?.is_bot) return;
-  if (!msg.text) return;
-
-  const text = msg.text.toLowerCase();
-
-  if (text.includes("надруковано")) {
-    dailyCount++;
-    weeklyCount++;
-    console.log(`📥 Повідомлення з групи: "${msg.text}" | День: ${dailyCount}, Тиждень: ${weeklyCount}`);
-  }
-
-  if (text === "/check") {
-    bot.sendMessage(
-      msg.chat.id,
-      `✅ Бот активний.\n📦 Сьогодні: ${dailyCount} відправлень.\n🗓️ Цього тижня: ${weeklyCount}.`
-    );
-  }
-
-  if (text === "/reset") {
-    dailyCount = 0;
-    weeklyCount = 0;
-    bot.sendMessage(msg.chat.id, "♻️ Лічильники скинуто вручну.");
-    console.log("🔄 Лічильники обнулено вручну в групі.");
-  }
-});
-
-// === Форматування дати ===
+// Форматує дату у вигляді “22 жовтня 2025”
 function formatDate(date) {
   return date.toLocaleDateString("uk-UA", {
     day: "2-digit",
@@ -89,36 +25,112 @@ function formatDate(date) {
   });
 }
 
-// === Розклад: щодня о 18:00 ===
-cron.schedule("0 18 * * *", async () => {
-  const now = new Date();
-  const formattedDate = formatDate(now);
+// Повертає UNIX timestamp початку доби (00:00)
+function startOfDay(date) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return Math.floor(d.getTime() / 1000);
+}
 
-  const dayMessage = `📅 ${formattedDate}\n📦 Підсумок дня: ${dailyCount} відправлень`;
-  await bot.sendMessage(GROUP_ID, dayMessage);
+// Повертає UNIX timestamp кінця доби (23:59)
+function endOfDay(date) {
+  const d = new Date(date);
+  d.setHours(23, 59, 59, 999);
+  return Math.floor(d.getTime() / 1000);
+}
 
-  // якщо п'ятниця — також тижневий підсумок
-  if (now.getDay() === 5) {
-    const startOfWeek = new Date(now);
-    startOfWeek.setDate(now.getDate() - 4);
-    const startStr = startOfWeek.toLocaleDateString("uk-UA", {
-      day: "2-digit",
-      month: "long",
-    });
-    const endStr = now.toLocaleDateString("uk-UA", {
-      day: "2-digit",
-      month: "long",
-    });
+// === Основна функція підрахунку ===
+async function countMessagesInChannel(days = 1) {
+  try {
+    let offset = 0;
+    let count = 0;
+    const now = new Date();
 
-    const weekMessage = `🗓️ Підсумок тижня, ${startStr} — ${endStr}\nУсього відправок: ${weeklyCount}`;
-    await bot.sendMessage(GROUP_ID, weekMessage);
-    weeklyCount = 0;
+    // Обчислюємо часовий діапазон
+    const fromDate = new Date(now);
+    fromDate.setDate(now.getDate() - (days - 1));
+
+    const start = startOfDay(fromDate);
+    const end = endOfDay(now);
+
+    // Отримуємо історію (до 1000 постів)
+    const updates = await bot.getUpdates({ offset, limit: 1000 });
+    const posts = updates
+      .map((u) => u.channel_post)
+      .filter((p) => p && p.chat && String(p.chat.id) === CHANNEL_ID);
+
+    // Фільтруємо тільки сьогоднішні повідомлення
+    for (const post of posts) {
+      if (!post.date) continue;
+      if (post.date >= start && post.date <= end) {
+        const text = (post.text || post.caption || "").toLowerCase();
+        if (text.includes("надруковано")) count++;
+      }
+    }
+
+    return count;
+  } catch (err) {
+    console.error("❌ Помилка при підрахунку:", err.message);
+    return 0;
   }
+}
 
-  dailyCount = 0;
+// === Команда /check: миттєвий підсумок дня ===
+bot.on("channel_post", async (msg) => {
+  if (!msg.text) return;
+  const text = msg.text.toLowerCase();
+
+  if (text === "/check") {
+    const todayCount = await countMessagesInChannel(1);
+    const now = new Date();
+    const formattedDate = formatDate(now);
+
+    await bot.sendMessage(
+      CHANNEL_ID,
+      `📅 ${formattedDate}\n📦 Підсумок дня: ${todayCount} відправлень`
+    );
+  }
 });
 
-// === HTTP сервер для Render ===
+// === Підсумок щодня о 18:00 (Київ) ===
+cron.schedule(
+  "0 18 * * *",
+  async () => {
+    const now = new Date();
+    const formattedDate = formatDate(now);
+
+    const todayCount = await countMessagesInChannel(1);
+
+    // надсилаємо підсумок дня
+    await bot.sendMessage(
+      CHANNEL_ID,
+      `📅 ${formattedDate}\n📦 Підсумок дня: ${todayCount} відправлень`
+    );
+
+    // якщо п’ятниця — також тижневий підсумок
+    if (now.getDay() === 5) {
+      const weekCount = await countMessagesInChannel(7);
+      const startOfWeek = new Date(now);
+      startOfWeek.setDate(now.getDate() - 4);
+      const startStr = startOfWeek.toLocaleDateString("uk-UA", {
+        day: "2-digit",
+        month: "long",
+      });
+      const endStr = now.toLocaleDateString("uk-UA", {
+        day: "2-digit",
+        month: "long",
+      });
+
+      await bot.sendMessage(
+        CHANNEL_ID,
+        `🗓️ Підсумок тижня, ${startStr} — ${endStr}\nУсього відправок: ${weekCount}`
+      );
+    }
+  },
+  { timezone: "Europe/Kyiv" }
+);
+
+// === HTTP-сервер для Render ===
 http
   .createServer((req, res) => {
     res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
@@ -127,5 +139,3 @@ http
   .listen(process.env.PORT || 3000, () => {
     console.log("🌐 HTTP сервер запущено на порту", process.env.PORT || 3000);
   });
-
-console.log("✅ Daily Summary Bot запущено і чекає на повідомлення...");
