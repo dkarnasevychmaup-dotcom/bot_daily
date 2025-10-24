@@ -56,7 +56,7 @@ async def send_week_summary():
 
 async def send_all_summary():
     count = await count_messages(None)
-    await client.send_message(CHANNEL_ID, f"📊 Усього повідомлень з 'надруковано' за весь час: {count}")
+    await client.send_message(CHANNEL_ID, f"📊 Усього відправлень за весь час: {count}")
 
 # ----------------------------- Обробка команд -----------------------------
 @client.on(events.NewMessage())
@@ -97,3 +97,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
