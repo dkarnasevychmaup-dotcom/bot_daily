@@ -1,6 +1,6 @@
 from telethon import TelegramClient, events
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import asyncio, os, threading
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 
@@ -25,13 +25,20 @@ def format_date(date):
 # ----------------------------- основна логіка -----------------------------
 client = TelegramClient(SESSION, API_ID, API_HASH)
 
-async def count_messages(days=1):
-    """Підрахунок повідомлень зі словом 'надруковано' за останні N днів"""
-    now = datetime.now()
-    since = now - timedelta(days=days)
+async def count_messages(days=None):
+    """
+    Підрахунок повідомлень зі словом 'надруковано'
+    days=None -> усі повідомлення
+    """
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=days) if days else None
     count = 0
+
     async for msg in client.iter_messages(CHANNEL_ID, reverse=True):
-        if msg.date < since:
+        if not msg.date:
+            continue
+        msg_date = msg.date.astimezone(timezone.utc)
+        if since and msg_date < since:
             break
         if msg.message and "надруковано" in msg.message.lower():
             count += 1
@@ -56,25 +63,38 @@ async def send_week_summary():
         f"🗓️ Підсумок тижня, {start_str} — {end_str}\nУсього відправок: {count}"
     )
 
+async def send_all_summary():
+    count = await count_messages(None)
+    now = datetime.now()
+    await client.send_message(
+        CHANNEL_ID,
+        f"📊 Всього повідомлень з 'надруковано' за весь час: {count}"
+    )
+
 # ----------------------------- обробка команд -----------------------------
-@client.on(events.NewMessage(chats=CHANNEL_ID))
+@client.on(events.NewMessage())
 async def handler(event):
+    if event.chat_id != CHANNEL_ID:
+        return
+
     text = (event.message.message or "").strip().lower()
     if text == "/check":
         await send_day_summary()
     elif text == "/week":
         await send_week_summary()
+    elif text == "/check_all":
+        await send_all_summary()
     elif text == "/reset_day":
-        await client.send_message(CHANNEL_ID, "ℹ️ Історія береться напряму з Telegram — скидати нічого не потрібно 🙂")
+        await client.send_message(CHANNEL_ID, "♻️ Денний підрахунок не зберігається — усе береться з історії 🙂")
     elif text == "/reset_week":
-        await client.send_message(CHANNEL_ID, "ℹ️ Історія береться напряму з Telegram — скидати нічого не потрібно 🙂")
+        await client.send_message(CHANNEL_ID, "♻️ Тижневий підрахунок не зберігається — усе береться з історії 🙂")
 
 # ----------------------------- планувальник -----------------------------
 scheduler = AsyncIOScheduler(timezone="Europe/Kyiv")
 scheduler.add_job(send_day_summary, "cron", hour=18, minute=0)
 scheduler.add_job(send_week_summary, "cron", day_of_week="fri", hour=18, minute=1)
 
-# ----------------------------- фейковий HTTP сервер -----------------------------
+# ----------------------------- HTTP сервер для Render -----------------------------
 def run_server():
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
