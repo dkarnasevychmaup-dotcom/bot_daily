@@ -2,6 +2,8 @@ from telethon import TelegramClient, events
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from datetime import datetime, timedelta
 import asyncio, json, os
+import threading
+from http.server import SimpleHTTPRequestHandler, HTTPServer
 
 API_ID = 28285997                   # свій з https://my.telegram.org/apps
 API_HASH = "ed9c2749be7b40b4395c6af26c2b6bad"  # свій hash
@@ -96,6 +98,15 @@ scheduler = AsyncIOScheduler(timezone="Europe/Kyiv")
 scheduler.add_job(cleanup_old, "interval", hours=12)
 scheduler.add_job(send_day_summary, "cron", hour=18, minute=0)
 scheduler.add_job(send_week_summary, "cron", day_of_week="fri", hour=18, minute=1)
+
+# ----------------------------- фейковий HTTP сервер -----------------------------
+def run_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
+    print(f"🌐 HTTP сервер запущено на порту {port}")
+    server.serve_forever()
+
+threading.Thread(target=run_server, daemon=True).start()
 
 # ----------------------------- запуск -----------------------------
 async def main():
