@@ -1,35 +1,15 @@
 from telethon import TelegramClient, events
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from datetime import datetime, timedelta
-import asyncio, json, os
-import threading
+import asyncio, os, threading
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 
-API_ID = 28285997                   # свій з https://my.telegram.org/apps
-API_HASH = "ed9c2749be7b40b4395c6af26c2b6bad"  # свій hash
-SESSION = "daily_summary_session"    # ім’я сесії
-CHANNEL_ID = -1003188966218          # твій канал
-DATA_FILE = "data.json"
+API_ID = 28285997                   # твій API ID з my.telegram.org
+API_HASH = "ed9c2749be7b40b4395c6af26c2b6bad"  # твій API Hash
+SESSION = "daily_summary_session"    # сесія
+CHANNEL_ID = -1003188966218          # ID твого каналу
 
-# ----------------------------- допоміжні функції -----------------------------
-def load_data():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return []
-
-def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-def cleanup_old():
-    data = load_data()
-    week_ago = datetime.now() - timedelta(days=7)
-    filtered = [d for d in data if d["ts"] > week_ago.timestamp()]
-    if len(filtered) != len(data):
-        save_data(filtered)
-        print(f"🧹 Очистив {len(data)-len(filtered)} старих записів")
-
+# ----------------------------- форматування дати -----------------------------
 def format_date(date):
     months = {
         "January": "січня", "February": "лютого", "March": "березня",
@@ -45,61 +25,52 @@ def format_date(date):
 # ----------------------------- основна логіка -----------------------------
 client = TelegramClient(SESSION, API_ID, API_HASH)
 
-@client.on(events.NewMessage())   # ← зміна тут: без обмеження лише на канал
-async def handler(event):
-    if event.chat_id != CHANNEL_ID:
-        return  # ігноруємо чужі чати
-
-    text = event.message.message.lower()
-
-    # рахуємо надруковані
-    if "надруковано" in text:
-        data = load_data()
-        data.append({"ts": datetime.now().timestamp(), "text": event.message.message})
-        save_data(data)
-        print("📥 Нове повідомлення збережено")
-
-    # команди
-    cmd = text.strip()
-    if cmd == "/check":
-        await send_day_summary()
-    elif cmd == "/week":
-        await send_week_summary()
-    elif cmd == "/reset_day":
-        reset_day()
-        await client.send_message(CHANNEL_ID, "♻️ Денний лічильник очищено.")
-    elif cmd == "/reset_week":
-        save_data([])
-        await client.send_message(CHANNEL_ID, "♻️ Тижневий лічильник очищено.")
-
-# ----------------------------- підрахунок -----------------------------
-async def send_day_summary():
-    data = load_data()
+async def count_messages(days=1):
+    """Підрахунок повідомлень зі словом 'надруковано' за останні N днів"""
     now = datetime.now()
-    start = datetime(now.year, now.month, now.day)
-    end = start + timedelta(days=1)
-    count = len([d for d in data if start.timestamp() <= d["ts"] < end.timestamp()])
-    await client.send_message(CHANNEL_ID, f"📅 {format_date(now)}\n📦 Підсумок дня: {count} відправлень")
+    since = now - timedelta(days=days)
+    count = 0
+    async for msg in client.iter_messages(CHANNEL_ID, offset_date=since):
+        if msg.message and "надруковано" in msg.message.lower():
+            count += 1
+    return count
+
+async def send_day_summary():
+    count = await count_messages(1)
+    now = datetime.now()
+    await client.send_message(
+        CHANNEL_ID,
+        f"📅 {format_date(now)}\n📦 Підсумок дня: {count} відправлень"
+    )
 
 async def send_week_summary():
-    data = load_data()
+    count = await count_messages(7)
     now = datetime.now()
     start = now - timedelta(days=6)
-    count = len([d for d in data if d["ts"] >= start.timestamp()])
-    start_str = start.strftime("%d %B").replace("October","жовтня")
-    end_str = now.strftime("%d %B").replace("October","жовтня")
-    await client.send_message(CHANNEL_ID, f"🗓️ Підсумок тижня, {start_str} — {end_str}\nУсього відправок: {count}")
+    start_str = start.strftime("%d %B").replace("October", "жовтня")
+    end_str = now.strftime("%d %B").replace("October", "жовтня")
+    await client.send_message(
+        CHANNEL_ID,
+        f"🗓️ Підсумок тижня, {start_str} — {end_str}\nУсього відправок: {count}"
+    )
 
-def reset_day():
-    data = load_data()
-    now = datetime.now()
-    start = datetime(now.year, now.month, now.day)
-    filtered = [d for d in data if d["ts"] < start.timestamp()]
-    save_data(filtered)
+# ----------------------------- обробка команд -----------------------------
+@client.on(events.NewMessage())
+async def handler(event):
+    if event.chat_id != CHANNEL_ID:
+        return
+    text = (event.message.message or "").strip().lower()
+    if text == "/check":
+        await send_day_summary()
+    elif text == "/week":
+        await send_week_summary()
+    elif text == "/reset_day":
+        await client.send_message(CHANNEL_ID, "ℹ️ Історія береться напряму з Telegram — скидати нічого не потрібно 🙂")
+    elif text == "/reset_week":
+        await client.send_message(CHANNEL_ID, "ℹ️ Історія береться напряму з Telegram — скидати нічого не потрібно 🙂")
 
 # ----------------------------- планувальник -----------------------------
 scheduler = AsyncIOScheduler(timezone="Europe/Kyiv")
-scheduler.add_job(cleanup_old, "interval", hours=12)
 scheduler.add_job(send_day_summary, "cron", hour=18, minute=0)
 scheduler.add_job(send_week_summary, "cron", day_of_week="fri", hour=18, minute=1)
 
@@ -115,7 +86,7 @@ threading.Thread(target=run_server, daemon=True).start()
 # ----------------------------- запуск -----------------------------
 async def main():
     await client.start()
-    print("✅ Userbot активовано, чекає на повідомлення...")
+    print("✅ Userbot активовано, чекає на команди...")
     scheduler.start()
     await client.run_until_disconnected()
 
