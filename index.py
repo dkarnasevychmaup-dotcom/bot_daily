@@ -1,7 +1,7 @@
 from telethon import TelegramClient, events
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from datetime import datetime, timedelta, timezone
-import asyncio, os, threading, pytz
+import asyncio, os, pytz, threading
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 
 # ----------------------------- Налаштування -----------------------------
