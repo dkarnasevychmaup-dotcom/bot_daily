@@ -6,7 +6,7 @@ import asyncio, json, os
 API_ID = 28285997                   # свій з https://my.telegram.org/apps
 API_HASH = "ed9c2749be7b40b4395c6af26c2b6bad"  # свій hash
 SESSION = "daily_summary_session"    # ім’я сесії
-CHANNEL_ID = "-1003188966218"          # твій канал
+CHANNEL_ID = -1003188966218          # твій канал
 DATA_FILE = "data.json"
 
 # ----------------------------- допоміжні функції -----------------------------
@@ -29,11 +29,16 @@ def cleanup_old():
         print(f"🧹 Очистив {len(data)-len(filtered)} старих записів")
 
 def format_date(date):
-    return date.strftime("%d %B %Y").replace("January","січня").replace("February","лютого")\
-        .replace("March","березня").replace("April","квітня").replace("May","травня")\
-        .replace("June","червня").replace("July","липня").replace("August","серпня")\
-        .replace("September","вересня").replace("October","жовтня").replace("November","листопада")\
-        .replace("December","грудня")
+    months = {
+        "January": "січня", "February": "лютого", "March": "березня",
+        "April": "квітня", "May": "травня", "June": "червня",
+        "July": "липня", "August": "серпня", "September": "вересня",
+        "October": "жовтня", "November": "листопада", "December": "грудня"
+    }
+    eng = date.strftime("%d %B %Y")
+    for en, ua in months.items():
+        eng = eng.replace(en, ua)
+    return eng
 
 # ----------------------------- основна логіка -----------------------------
 client = TelegramClient(SESSION, API_ID, API_HASH)
@@ -41,13 +46,15 @@ client = TelegramClient(SESSION, API_ID, API_HASH)
 @client.on(events.NewMessage(chats=CHANNEL_ID))
 async def handler(event):
     text = event.message.message.lower()
+
+    # рахуємо надруковані
     if "надруковано" in text:
         data = load_data()
         data.append({"ts": datetime.now().timestamp(), "text": event.message.message})
         save_data(data)
         print("📥 Нове повідомлення збережено")
 
-    # ---- команди ----
+    # команди
     if text.strip() == "/check":
         await send_day_summary()
     elif text.strip() == "/week":
@@ -73,7 +80,7 @@ async def send_week_summary():
     now = datetime.now()
     start = now - timedelta(days=6)
     count = len([d for d in data if d["ts"] >= start.timestamp()])
-    start_str = start.strftime("%d %B").replace("October","жовтня") # для прикладу
+    start_str = start.strftime("%d %B").replace("October","жовтня")
     end_str = now.strftime("%d %B").replace("October","жовтня")
     await client.send_message(CHANNEL_ID, f"🗓️ Підсумок тижня, {start_str} — {end_str}\nУсього відправок: {count}")
 
@@ -87,18 +94,15 @@ def reset_day():
 # ----------------------------- планувальник -----------------------------
 scheduler = AsyncIOScheduler(timezone="Europe/Kyiv")
 scheduler.add_job(cleanup_old, "interval", hours=12)
-
-# Щодня о 18:00
 scheduler.add_job(send_day_summary, "cron", hour=18, minute=0)
-
-# Щоп’ятниці одразу після денного
 scheduler.add_job(send_week_summary, "cron", day_of_week="fri", hour=18, minute=1)
-scheduler.start()
 
 # ----------------------------- запуск -----------------------------
 async def main():
     await client.start()
     print("✅ Userbot активовано, чекає на повідомлення...")
+    scheduler.start()
     await client.run_until_disconnected()
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
