@@ -4,10 +4,10 @@ from datetime import datetime, timedelta
 import asyncio, os, threading
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 
-API_ID = 28285997                   # твій API ID з my.telegram.org
-API_HASH = "ed9c2749be7b40b4395c6af26c2b6bad"  # твій API Hash
-SESSION = "daily_summary_session"    # сесія
-CHANNEL_ID = -1003188966218          # ID твого каналу
+API_ID = 28285997
+API_HASH = "ed9c2749be7b40b4395c6af26c2b6bad"
+SESSION = "daily_summary_session"
+CHANNEL_ID = -1003188966218
 
 # ----------------------------- форматування дати -----------------------------
 def format_date(date):
@@ -30,7 +30,9 @@ async def count_messages(days=1):
     now = datetime.now()
     since = now - timedelta(days=days)
     count = 0
-    async for msg in client.iter_messages(CHANNEL_ID, offset_date=since):
+    async for msg in client.iter_messages(CHANNEL_ID, reverse=True):
+        if msg.date < since:
+            break
         if msg.message and "надруковано" in msg.message.lower():
             count += 1
     return count
@@ -55,10 +57,8 @@ async def send_week_summary():
     )
 
 # ----------------------------- обробка команд -----------------------------
-@client.on(events.NewMessage())
+@client.on(events.NewMessage(chats=CHANNEL_ID))
 async def handler(event):
-    if event.chat_id != CHANNEL_ID:
-        return
     text = (event.message.message or "").strip().lower()
     if text == "/check":
         await send_day_summary()
