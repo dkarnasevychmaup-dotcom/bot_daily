@@ -1,5 +1,6 @@
 from telethon import TelegramClient, events
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime, timedelta, timezone
 import asyncio, os, pytz, threading
 from flask import Flask
@@ -79,6 +80,20 @@ scheduler = AsyncIOScheduler(timezone="Europe/Kyiv")
 scheduler.add_job(send_day_summary, "cron", hour=18, minute=0)
 scheduler.add_job(send_week_summary, "cron", day_of_week="fri", hour=18, minute=1)
 
+# ----------------------------- Keep-alive (ping Telegram) -----------------------------
+async def keep_alive():
+    try:
+        await client.get_me()
+        print("💤 Ping Telegram — OK")
+    except Exception as e:
+        print("⚠️ Ping error:", e)
+
+def start_keepalive():
+    bg = BackgroundScheduler(timezone="Europe/Kyiv")
+    bg.add_job(lambda: asyncio.run_coroutine_threadsafe(keep_alive(), asyncio.get_event_loop()), "interval", minutes=5)
+    bg.start()
+    print("🔁 Keep-alive scheduler started")
+
 # ----------------------------- Flask сервер -----------------------------
 def run_server():
     port = int(os.environ.get("PORT", 10000))
@@ -98,6 +113,7 @@ async def main():
     await client.start()
     print("✅ Userbot активовано, чекає на команди...")
     scheduler.start()
+    start_keepalive()
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
