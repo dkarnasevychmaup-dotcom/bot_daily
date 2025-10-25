@@ -1,34 +1,19 @@
 from telethon import TelegramClient, events
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime, timedelta, timezone
-import asyncio, os, pytz, threading
+from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask
+import threading, os, asyncio
 
-# ----------------------------- Налаштування -----------------------------
+# === КОНФІГ ===
 API_ID = 28285997
 API_HASH = "ed9c2749be7b40b4395c6af26c2b6bad"
 SESSION = "daily_summary_session"
-CHANNEL_ID = -1003188966218  # ID твого каналу
-kyiv_tz = pytz.timezone("Europe/Kyiv")
+CHANNEL_ID = -1003188966218  # твій канал
 
+# === ІНІЦІАЛІЗАЦІЯ ===
 client = TelegramClient(SESSION, API_ID, API_HASH)
+app = Flask(__name__)
 
-# ----------------------------- Підрахунок повідомлень -----------------------------
-async def count_messages(days=None):
-    """Підрахунок повідомлень з 'надруковано' за останні N днів або за весь час."""
-    now = datetime.now(kyiv_tz)
-    since = now - timedelta(days=days) if days else None
-    count = 0
-
-    async for msg in client.iter_messages(CHANNEL_ID, search="надруковано"):
-        msg_time = msg.date.replace(tzinfo=timezone.utc).astimezone(kyiv_tz)
-        if since and msg_time < since:
-            break
-        count += 1
-    return count
-
-# ----------------------------- Форматування дати -----------------------------
 def format_date(date):
     months = {
         "January": "січня", "February": "лютого", "March": "березня",
@@ -41,80 +26,79 @@ def format_date(date):
         eng = eng.replace(en, ua)
     return eng
 
-# ----------------------------- Надсилання підсумків -----------------------------
+# === ПІДРАХУНОК ПОВІДОМЛЕНЬ ===
+async def count_messages(days=1):
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=days)
+    count = 0
+    async for msg in client.iter_messages(CHANNEL_ID, limit=5000):
+        if msg.date.replace(tzinfo=timezone.utc) < since:
+            break
+        if msg.message and "надруковано" in msg.message.lower():
+            count += 1
+    return count
+
 async def send_day_summary():
     count = await count_messages(1)
-    now = datetime.now(kyiv_tz)
-    await client.send_message(CHANNEL_ID, f"📅 {format_date(now)}\n📦 Підсумок дня: {count} відправлень")
+    now = datetime.now()
+    await client.send_message(
+        CHANNEL_ID,
+        f"📅 {format_date(now)}\n📦 Підсумок дня: {count} відправлень"
+    )
 
 async def send_week_summary():
     count = await count_messages(7)
-    now = datetime.now(kyiv_tz)
-    start = now - timedelta(days=6)
-    start_str = start.strftime("%d %B").replace("October", "жовтня")
-    end_str = now.strftime("%d %B").replace("October", "жовтня")
-    await client.send_message(CHANNEL_ID, f"🗓️ Підсумок тижня, {start_str} — {end_str}\nУсього відправок: {count}")
+    now = datetime.now()
+    start = (now - timedelta(days=6)).strftime("%d %B").replace("October", "жовтня")
+    end = now.strftime("%d %B").replace("October", "жовтня")
+    await client.send_message(
+        CHANNEL_ID,
+        f"🗓️ Підсумок тижня, {start} — {end}\nУсього відправок: {count}"
+    )
 
 async def send_all_summary():
-    count = await count_messages(None)
-    await client.send_message(CHANNEL_ID, f"📊 Усього відправлень за весь час: {count}")
+    count = 0
+    async for msg in client.iter_messages(CHANNEL_ID, limit=None):
+        if msg.message and "надруковано" in msg.message.lower():
+            count += 1
+    await client.send_message(
+        CHANNEL_ID,
+        f"📊 Усього відправлень за весь час: {count}"
+    )
 
-# ----------------------------- Обробка команд -----------------------------
-@client.on(events.NewMessage())
-async def handler(event):
-    if event.chat_id != CHANNEL_ID:
-        return
-    text = (event.message.message or "").strip().lower()
-
+# === КОМАНДИ ===
+@client.on(events.NewMessage(chats=CHANNEL_ID))
+async def command_handler(event):
+    text = event.message.message.lower().strip()
     if text == "/check":
         await send_day_summary()
     elif text == "/week":
         await send_week_summary()
     elif text == "/check_all":
         await send_all_summary()
-    elif text in ["/reset_day", "/reset_week"]:
-        await client.send_message(CHANNEL_ID, "ℹ️ Історія береться напряму з Telegram — скидати нічого не потрібно 🙂")
 
-# ----------------------------- Планувальник -----------------------------
-scheduler = AsyncIOScheduler(timezone="Europe/Kyiv")
-scheduler.add_job(send_day_summary, "cron", hour=18, minute=0)
-scheduler.add_job(send_week_summary, "cron", day_of_week="fri", hour=18, minute=1)
+# === ЩОДЕННИЙ РОЗКЛАД ===
+scheduler = BackgroundScheduler(timezone="Europe/Kyiv")
+scheduler.add_job(lambda: asyncio.run(send_day_summary()), "cron", hour=18, minute=0)
+scheduler.add_job(lambda: asyncio.run(send_week_summary()), "cron", day_of_week="fri", hour=18, minute=1)
+scheduler.start()
 
-# ----------------------------- Keep-alive (ping Telegram) -----------------------------
-async def keep_alive():
-    try:
-        await client.get_me()
-        print("💤 Ping Telegram — OK")
-    except Exception as e:
-        print("⚠️ Ping error:", e)
+# === KEEP-ALIVE FLASK ===
+@app.route("/")
+def home():
+    return "✅ Userbot активний і працює стабільно."
 
-def start_keepalive():
-    bg = BackgroundScheduler(timezone="Europe/Kyiv")
-    bg.add_job(lambda: asyncio.run_coroutine_threadsafe(keep_alive(), asyncio.get_event_loop()), "interval", minutes=5)
-    bg.start()
-    print("🔁 Keep-alive scheduler started")
-
-# ----------------------------- Flask сервер -----------------------------
-def run_server():
+def run_flask():
     port = int(os.environ.get("PORT", 10000))
-    app = Flask(__name__)
-
-    @app.route("/")
-    def home():
-        return "✅ Bot active and alive", 200
-
-    print(f"🌐 Flask сервер запущено на порту {port}")
     app.run(host="0.0.0.0", port=port)
 
-threading.Thread(target=run_server, daemon=True).start()
-
-# ----------------------------- Запуск -----------------------------
+# === СТАРТ ===
 async def main():
     await client.start()
-    print("✅ Userbot активовано, чекає на команди...")
-    scheduler.start()
-    start_keepalive()
+    print("✅ Userbot активовано...")
+    await client.send_message(CHANNEL_ID, "♻️ Бот перезапущено, підключення відновлено")
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
+    threading.Thread(target=run_flask, daemon=True).start()
     asyncio.run(main())
