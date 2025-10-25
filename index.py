@@ -2,7 +2,7 @@ from telethon import TelegramClient, events
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from datetime import datetime, timedelta, timezone
 import asyncio, os, pytz, threading
-from http.server import SimpleHTTPRequestHandler, HTTPServer
+from flask import Flask
 
 # ----------------------------- Налаштування -----------------------------
 API_ID = 28285997
@@ -76,15 +76,20 @@ async def handler(event):
 
 # ----------------------------- Планувальник -----------------------------
 scheduler = AsyncIOScheduler(timezone="Europe/Kyiv")
-scheduler.add_job(send_day_summary, "cron", hour=18, minute=0)           # кожного дня о 18:00
-scheduler.add_job(send_week_summary, "cron", day_of_week="fri", hour=18, minute=1)  # щоп’ятниці о 18:01
+scheduler.add_job(send_day_summary, "cron", hour=18, minute=0)
+scheduler.add_job(send_week_summary, "cron", day_of_week="fri", hour=18, minute=1)
 
-# ----------------------------- HTTP сервер для Render -----------------------------
+# ----------------------------- Flask сервер -----------------------------
 def run_server():
     port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
-    print(f"🌐 HTTP сервер запущено на порту {port}")
-    server.serve_forever()
+    app = Flask(__name__)
+
+    @app.route("/")
+    def home():
+        return "✅ Bot active and alive", 200
+
+    print(f"🌐 Flask сервер запущено на порту {port}")
+    app.run(host="0.0.0.0", port=port)
 
 threading.Thread(target=run_server, daemon=True).start()
 
@@ -97,4 +102,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
