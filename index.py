@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import asyncio
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
@@ -72,13 +73,13 @@ async def handle_message(message: types.Message):
         return
 
     text = (message.text or "").strip()
-    lower = text.lower()
 
-    # враховуємо нові "надруковано" (тільки коли надходять у майбутньому)
-    if "надруковано" in lower:
+    # ✅ враховує і надруковано, і Надруковано, і з емодзі попереду
+    if re.search(r"[✅🟢🔵🟩⬜⬛⚪⚫]*\s*надруковано", text, re.IGNORECASE):
         add_event(message.message_id)
-        # можна прибрати принт коли не треба
-        print(f"📥 Зараховано: mid={message.message_id}")
+        print(f"📥 Зараховано повідомлення з 'надруковано': {text}")
+
+    lower = text.lower().strip()
 
     # команди
     if lower == "/check":
